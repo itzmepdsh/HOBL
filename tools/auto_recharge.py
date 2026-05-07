@@ -14,12 +14,12 @@ class Tool(Scenario):
     '''
     Pause run and recharge device when battery drops below [charge_threshold], then resume.
 
-    PDU control (APC AP7921B via SNMPv1):
-      Set [auto_recharge] pdu_ip to the PDU address to enable PDU-based charging.
-      pdu_outlet        - outlet number to control (1-8, or 0 for all); default 1
-      pdu_community_write - SNMPv1 write community string; default 'private'
-      pdu_script        - path to apc_pdu_controller.ps1
-    When pdu_ip is set, charge_on_call / charge_off_call are ignored.
+    Set charge_on_call and charge_off_call in the [global] section of the device profile
+    to the full shell command that turns the charger on/off. If the command points to a
+    .ps1 script it will be wrapped with powershell.exe automatically, so you can paste
+    the invocation directly, e.g.:
+      charge_on_call:  C:\pdu_controller\apc_pdu_controller.ps1 on 7 -PduIp 10.150.18.38 -Community hobl
+      charge_off_call: C:\pdu_controller\apc_pdu_controller.ps1 off 7 -PduIp 10.150.18.38 -Community hobl
     '''
     module = __module__.split('.')[-1]
     # Set default parameters
@@ -27,12 +27,6 @@ class Tool(Scenario):
     Params.setDefault(module, 'resume_threshold', '95')  # Percent battery level (95%)
     Params.setDefault('charge_on', 'charge_on_call', '')
     Params.setDefault('charge_off', 'charge_off_call', '')
-
-    # PDU controller parameters (APC AP7921B SNMPv1)
-    Params.setDefault(module, 'pdu_ip', '')
-    Params.setDefault(module, 'pdu_outlet', '1')
-    Params.setDefault(module, 'pdu_community_write', 'private')
-    Params.setDefault(module, 'pdu_script', r'C:\pdu_controller\apc_pdu_controller.ps1')
 
     # Get parameters
     charge_threshold = Params.get(module, 'charge_threshold')
@@ -45,11 +39,6 @@ class Tool(Scenario):
         charge_on_call = Params.get('charge_on', 'charge_on_call')
     if charge_off_call == '' or charge_off_call is None:
         charge_off_call = Params.get('charge_off', 'charge_off_call')
-
-    pdu_ip              = Params.get(module, 'pdu_ip')
-    pdu_outlet          = Params.get(module, 'pdu_outlet')
-    pdu_community_write = Params.get(module, 'pdu_community_write')
-    pdu_script          = Params.get(module, 'pdu_script')
 
     already_started = False
 
@@ -124,26 +113,22 @@ class Tool(Scenario):
 
     def chargeOn(self):
         logging.info("Attempting to turn on charger...")
-        if self.pdu_ip:
-            self._invoke_pdu('on')
-        elif self.charge_on_call:
+        if self.charge_on_call:
             self._host_call(self._wrap_ps1(self.charge_on_call))
             if Params.get('global', 'local_execution') == '1':
                 self._host_call('utilities\\MsgPrompt.exe -WaitForAC')
         else:
-            logging.warning("No charge_on_call or pdu_ip specified.")
+            logging.warning("No charge_on_call specified.")
         logging.info("Charger on.")
 
     def chargeOff(self):
         logging.info("Attempting to turn off charger...")
-        if self.pdu_ip:
-            self._invoke_pdu('off')
-        elif self.charge_off_call:
+        if self.charge_off_call:
             self._host_call(self._wrap_ps1(self.charge_off_call))
             if Params.get('global', 'local_execution') == '1':
                 self._host_call('utilities\\MsgPrompt.exe -WaitForDC')
         else:
-            logging.warning("No charge_off_call or pdu_ip specified.")
+            logging.warning("No charge_off_call specified.")
         logging.info("Charger off.")
 
     def _wrap_ps1(self, call):
@@ -160,13 +145,3 @@ class Tool(Scenario):
             args_suffix = f' {rest}' if rest else ''
             return f'powershell.exe -ExecutionPolicy Bypass -File "{first_token}"{args_suffix}'
         return call
-
-    def _invoke_pdu(self, action):
-        '''Invoke apc_pdu_controller.ps1 for the configured outlet and PDU IP.'''
-        cmd = (
-            f'powershell.exe -ExecutionPolicy Bypass -File "{self.pdu_script}"'
-            f' {action} {self.pdu_outlet} {self.pdu_ip}'
-            f' -Community {self.pdu_community_write}'
-        )
-        logging.info(f"PDU command: {cmd}")
-        self._host_call(cmd)
